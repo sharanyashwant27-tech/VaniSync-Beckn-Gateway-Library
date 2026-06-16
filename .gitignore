@@ -32,3 +32,6 @@ coverage/
 # Swarm session state
 .cursor/blackboard/current.json
 .cursor/blackboard/waves/
+
+# Local SQLite data
+data/

@@ -1,0 +1,50 @@
+---
+description: VaniSync-Beckn architectural constraints — atomic outbox, offline-first handlers
+globs: "**/*.go"
+alwaysApply: true
+---
+
+# VaniSync-Beckn Engineering Rules
+
+## Non-negotiable invariants
+
+1. **Atomic outbox** — Every domain write (`local_orders`) and outbox insert (`sync_queue`) MUST occur in a single SQL transaction via `store.WithTx` / `outbox.WriteOrderWithOutbox`. Never insert one without the other.
+
+2. **No synchronous network in handlers** — `pkg/vanisync` and `internal/outbox` MUST NOT call HTTP, gRPC, or DNS. Relay belongs exclusively in `internal/sync`.
+
+3. **Sign before queue** — Ed25519 signature MUST be computed via `internal/crypto` before the outbox row is inserted. Store signature on the outbox row.
+
+4. **FIFO relay** — Sync engine dequeues `ORDER BY created_at ASC`. Do not skip or reorder pending rows.
+
+5. **Idempotency UUID** — Each `sync_queue.id` is a unique signed idempotency key; reuse on retry, never regenerate for the same aggregate.
+
+## Go conventions
+
+- **`context.Context` first** — Every exported function that performs I/O or may cancel: `func Foo(ctx context.Context, ...)`.
+- **`log/slog` only** — No `log.Printf` or third-party loggers. Pass logger via context or struct field.
+- **Errors wrap** — Use `fmt.Errorf("package: action: %w", err)` for traceability.
+
+## Examples
+
+```go
+// BAD — network in handler
+func (c *Client) ConfirmOrder(ctx context.Context, req Request) error {
+    c.relay.Post(ctx, payload) // forbidden
+    return c.store.InsertOrder(ctx, req)
+}
+
+// GOOD — atomic local commit only
+func (c *Client) ConfirmOrder(ctx context.Context, req Request) (*Order, error) {
+    sig, err := c.keys.Sign(ctx, payload)
+    if err != nil {
+        return nil, fmt.Errorf("vanisync: sign: %w", err)
+    }
+    return c.outbox.WriteOrderWithOutbox(ctx, order, payload, sig)
+}
+```
+
+## References
+
+- ADR-001: `docs/architecture/adr/ADR-001-transactional-outbox.md`
+- TLA+ model: `specs/VaniSyncOutbox.tla`
+- Sync behavior: `docs/architecture/04-sync-behavioral-view.md`

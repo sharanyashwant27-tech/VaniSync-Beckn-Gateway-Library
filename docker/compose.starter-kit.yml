@@ -1,0 +1,40 @@
+# VaniSync-Beckn starter-kit integration (Phase 4)
+#
+# This file is a commented stub. Uncomment and adjust paths after cloning
+# https://github.com/beckn/starter-kit into vendor/beckn-starter-kit or
+# adding it as a git submodule.
+#
+# Usage (when enabled):
+#   docker compose -f docker/compose.starter-kit.yml up -d
+#   go test ./test/integration/... -tags=integration
+#
+# Reference: beckn/starter-kit provides sandbox BAP/BPP/gateway containers
+# for end-to-end retail confirm flows with signed Beckn messages.
+
+# version: "3.9"
+#
+# services:
+#   beckn-gateway:
+#     image: beckn/gateway:latest
+#     ports:
+#       - "8080:8080"
+#     networks:
+#       - vanisync-beckn
+#
+#   beckn-bap:
+#     extends:
+#       file: ../vendor/beckn-starter-kit/docker-compose.yml
+#       service: bap
+#     networks:
+#       - vanisync-beckn
+#
+#   beckn-bpp:
+#     extends:
+#       file: ../vendor/beckn-starter-kit/docker-compose.yml
+#       service: bpp
+#     networks:
+#       - vanisync-beckn
+#
+# networks:
+#   vanisync-beckn:
+#     driver: bridge
