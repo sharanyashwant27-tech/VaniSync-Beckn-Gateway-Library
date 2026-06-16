@@ -99,7 +99,7 @@ Domain table for retail orders on the edge device.
 | `id` | TEXT PK | Signed idempotency UUID |
 | `aggregate_id` | TEXT | FK → `local_orders.id` |
 | `payload_json` | TEXT | Beckn request (pre-signed content) |
-| `signature` | TEXT | Ed25519 hex |
+| `signature` | TEXT | Ed25519 base64 |
 | `status` | TEXT | `PENDING` \| `IN_FLIGHT` \| `SENT` \| `FAILED` |
 | `attempt_count` | INTEGER | Retry counter |
 | `created_at` | INTEGER | FIFO ordering |
