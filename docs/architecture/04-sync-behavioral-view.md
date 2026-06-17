@@ -63,9 +63,14 @@ loop until ctx cancelled:
     mark row SENT, order SYNCED
   else:
     increment attempt_count
-    mark row PENDING (or FAILED after max_attempts)
-    sleep(backoff(attempt_count))
+    if attempt_count >= max_attempts (default 10):
+      mark sync_queue FAILED and local_orders FAILED
+    else:
+      mark row PENDING
+      sleep(backoff(attempt_count))
 ```
+
+**Implementation (v1):** `sync.Engine` defaults `max_attempts` to **10**. Gateway **4xx** responses are treated as non-retryable and immediately mark `FAILED`. **5xx** and transport errors retry with exponential backoff until the cap.
 
 **FIFO guarantee:** Only one in-flight message per device in v1; strict ordering by `created_at`.
 
