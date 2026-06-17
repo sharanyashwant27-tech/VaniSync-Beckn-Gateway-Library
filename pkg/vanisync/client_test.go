@@ -2,11 +2,13 @@ package vanisync_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
 	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/sync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/voice"
 	"github.com/sharanyashwant27-tech/vanisync-beckn/pkg/vanisync"
 )
 
@@ -48,6 +50,37 @@ func TestConfirmOrderFromVoiceUsesStubASR(t *testing.T) {
 	client, err := vanisync.New(vanisync.Options{
 		DBPath: filepath.Join(t.TempDir(), "voice.db"),
 		Probe:  sync.StaticProbe{Active: false},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	order, err := client.ConfirmOrderFromVoice(ctx, []byte("audio"), vanisync.ConfirmOrderRequest{
+		ProviderID: "p", ItemID: "i", Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("confirm from voice: %v", err)
+	}
+	if order.Status != "PENDING" {
+		t.Fatalf("status = %q", order.Status)
+	}
+}
+
+type failingASR struct{}
+
+func (failingASR) Transcribe(context.Context, []byte) (*voice.Transcript, error) {
+	return nil, errors.New("asr unavailable")
+}
+
+func TestConfirmOrderFromVoiceFallsBackOnASRError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client, err := vanisync.New(vanisync.Options{
+		DBPath: filepath.Join(t.TempDir(), "asr-fallback.db"),
+		Probe:  sync.StaticProbe{Active: false},
+		ASR:    failingASR{},
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)

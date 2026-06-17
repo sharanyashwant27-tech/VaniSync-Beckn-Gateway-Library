@@ -68,13 +68,15 @@ func New(opts Options) (*Client, error) {
 	}
 
 	engine := sync.NewEngine(sync.Config{
-		Store:        st,
-		Relay:        relay,
-		Probe:        probe,
-		Keys:         keys,
-		PollInterval: opts.PollInterval,
-		BaseBackoff:  opts.BaseBackoff,
-		Logger:       opts.Logger,
+		Store:           st,
+		Relay:           relay,
+		Probe:           probe,
+		Keys:            keys,
+		PollInterval:    opts.PollInterval,
+		BaseBackoff:     opts.BaseBackoff,
+		InFlightTimeout: opts.InFlightTimeout,
+		MaxAttempts:     opts.MaxAttempts,
+		Logger:          opts.Logger,
 	})
 
 	return &Client{
@@ -136,7 +138,8 @@ func (c *Client) ConfirmRetailOrder(ctx context.Context, req ConfirmOrderRequest
 func (c *Client) ConfirmOrderFromVoice(ctx context.Context, audio []byte, req ConfirmOrderRequest) (*LocalOrder, error) {
 	transcript, err := c.asr.Transcribe(ctx, audio)
 	if err != nil {
-		return nil, fmt.Errorf("transcribe voice: %w", err)
+		c.logger.Warn("ASR failed, falling back to structured confirm", "err", err)
+		return c.ConfirmRetailOrder(ctx, req)
 	}
 	c.logger.Info("voice transcript", "text", transcript.Text, "lang", transcript.Language)
 	return c.ConfirmRetailOrder(ctx, req)

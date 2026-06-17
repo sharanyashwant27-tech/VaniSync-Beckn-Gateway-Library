@@ -39,7 +39,9 @@ type Options struct {
 	KeyManager    *crypto.SimpleKeyManager
 	ASR           voice.ASRProvider
 	HTTPClient    *http.Client
-	PollInterval  time.Duration
-	BaseBackoff   time.Duration
-	Logger        *slog.Logger
+	PollInterval    time.Duration
+	BaseBackoff     time.Duration
+	InFlightTimeout time.Duration
+	MaxAttempts     int
+	Logger          *slog.Logger
 }
