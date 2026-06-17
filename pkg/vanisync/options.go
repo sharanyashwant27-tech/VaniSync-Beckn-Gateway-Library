@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/sync"
-	"github.com/yashwant/vanisync-beckn/internal/voice"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/sync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/voice"
 )
 
 // LocalOrder is the public view of a persisted retail order.
@@ -32,6 +32,7 @@ type ConfirmOrderRequest struct {
 // Options configures a VaniSync client.
 type Options struct {
 	DBPath        string
+	KeyPath       string
 	RelayEndpoint string
 	Relay         beckn.RelayClient
 	Probe         sync.NetworkProbe

@@ -6,12 +6,12 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/outbox"
-	"github.com/yashwant/vanisync-beckn/internal/store"
-	"github.com/yashwant/vanisync-beckn/internal/sync"
-	"github.com/yashwant/vanisync-beckn/internal/voice"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/outbox"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/sync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/voice"
 )
 
 // Client is the public VaniSync Beckn gateway SDK entry point.
@@ -28,6 +28,9 @@ func New(opts Options) (*Client, error) {
 	if opts.DBPath == "" {
 		opts.DBPath = "data/vanisync.db"
 	}
+	if opts.KeyPath == "" {
+		opts.KeyPath = "data/ed25519.key"
+	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
@@ -43,10 +46,10 @@ func New(opts Options) (*Client, error) {
 
 	keys := opts.KeyManager
 	if keys == nil {
-		keys, err = crypto.NewSimpleKeyManager()
+		keys, err = crypto.LoadOrCreateSimpleKeyManager(opts.KeyPath)
 		if err != nil {
 			_ = st.Close()
-			return nil, fmt.Errorf("create key manager: %w", err)
+			return nil, fmt.Errorf("load key manager: %w", err)
 		}
 	}
 
