@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
 )
 
 func TestBuildRetailConfirmPayload(t *testing.T) {

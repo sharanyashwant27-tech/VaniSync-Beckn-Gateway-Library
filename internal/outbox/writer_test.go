@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/outbox"
-	"github.com/yashwant/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/outbox"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
 )
 
 func TestWriteOrderWithOutboxAtomic(t *testing.T) {

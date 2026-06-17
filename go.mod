@@ -1,4 +1,4 @@
-module github.com/yashwant/vanisync-beckn
+module github.com/sharanyashwant27-tech/vanisync-beckn
 
 go 1.22
 

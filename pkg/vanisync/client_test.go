@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
-	"github.com/yashwant/vanisync-beckn/internal/sync"
-	"github.com/yashwant/vanisync-beckn/pkg/vanisync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/sync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/pkg/vanisync"
 )
 
 func TestConfirmRetailOrderWritesPendingOrder(t *testing.T) {

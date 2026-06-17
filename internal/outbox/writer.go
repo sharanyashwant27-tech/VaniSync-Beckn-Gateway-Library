@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
 )
 
 // Writer performs atomic domain + outbox writes.

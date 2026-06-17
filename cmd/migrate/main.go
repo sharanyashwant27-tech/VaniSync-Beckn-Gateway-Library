@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yashwant/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
 )
 
 func main() {
