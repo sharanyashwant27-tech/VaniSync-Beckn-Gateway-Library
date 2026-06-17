@@ -42,7 +42,8 @@ func (s *Store) DequeuePending(ctx context.Context) (*SyncQueueItem, error) {
 
 // MarkQueueStatus updates sync_queue status for a row.
 func (s *Store) MarkQueueStatus(ctx context.Context, id, status string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sync_queue SET status = ? WHERE id = ?`, status, id)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sync_queue SET status = ?, in_flight_at = NULL WHERE id = ?`, status, id)
 	if err != nil {
 		return fmt.Errorf("mark queue status: %w", err)
 	}
@@ -88,6 +89,23 @@ func (s *Store) ReclaimStaleInFlight(ctx context.Context, staleBeforeMs int64) (
 	return n, nil
 }
 
+// ReclaimNullInFlightAt resets IN_FLIGHT rows missing in_flight_at to PENDING.
+func (s *Store) ReclaimNullInFlightAt(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sync_queue
+		SET status = ?, in_flight_at = NULL
+		WHERE status = ? AND in_flight_at IS NULL`,
+		QueueStatusPending, QueueStatusInFlight)
+	if err != nil {
+		return 0, fmt.Errorf("reclaim null in_flight_at: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("reclaim null in_flight_at rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // MarkQueueInFlight marks a pending row IN_FLIGHT when no other row is in flight.
 func (s *Store) MarkQueueInFlight(ctx context.Context, id string) error {
 	now := NowMillis()
@@ -120,6 +138,17 @@ func (s *Store) IncrementAttempt(ctx context.Context, id string) error {
 		return fmt.Errorf("increment attempt: %w", err)
 	}
 	return nil
+}
+
+// MarkFailed marks the outbox row and linked order as FAILED atomically.
+func (s *Store) MarkFailed(ctx context.Context, queueID, orderID string) error {
+	now := NowMillis()
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := markQueueStatusTx(ctx, tx, queueID, QueueStatusFailed); err != nil {
+			return err
+		}
+		return UpdateOrderStatus(ctx, tx, orderID, OrderStatusFailed, now)
+	})
 }
 
 // MarkSent marks the outbox row as sent and updates the linked order to SYNCED atomically.

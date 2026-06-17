@@ -41,6 +41,16 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 
+	// WAL improves concurrent read/write on embedded SQLite (see ADR-001 outbox durability).
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable WAL journal mode: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA synchronous=NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set synchronous NORMAL: %w", err)
+	}
+
 	s := &Store{db: db}
 	if err := s.MigrateEmbedded(ctx); err != nil {
 		_ = db.Close()
