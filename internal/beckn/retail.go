@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,12 +32,12 @@ func BuildRetailConfirmPayload(req ConfirmOrderRequest) ([]byte, error) {
 	if req.OrderID == "" {
 		return nil, fmt.Errorf("order id required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	ts := time.UnixMilli(req.UpdatedAtMs).UTC().Format(time.RFC3339)
 	payload := map[string]any{
 		"context": map[string]any{
 			"action": ActionConfirm,
 			"domain": "retail",
-			"timestamp": now,
+			"timestamp": ts,
 		},
 		"message": map[string]any{
 			"order": map[string]any{
@@ -68,6 +69,21 @@ type RelayRequest struct {
 // RelayClient relays signed Beckn payloads to a gateway.
 type RelayClient interface {
 	Relay(ctx context.Context, req RelayRequest) error
+}
+
+// RelayHTTPError is returned when the gateway responds with a non-2xx HTTP status.
+type RelayHTTPError struct {
+	StatusCode int
+}
+
+func (e *RelayHTTPError) Error() string {
+	return fmt.Sprintf("relay failed: status %d", e.StatusCode)
+}
+
+// IsRelayClientError reports whether err is a non-retryable gateway 4xx response.
+func IsRelayClientError(err error) bool {
+	var he *RelayHTTPError
+	return errors.As(err, &he) && he.StatusCode >= 400 && he.StatusCode < 500
 }
 
 // HTTPRelayClient posts signed payloads to a Beckn-compatible endpoint.
@@ -105,7 +121,7 @@ func (c *HTTPRelayClient) Relay(ctx context.Context, req RelayRequest) error {
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("relay failed: status %d", resp.StatusCode)
+		return &RelayHTTPError{StatusCode: resp.StatusCode}
 	}
 	return nil
 }
