@@ -4,6 +4,8 @@
 
 Built for Common Service Centre (CSC) deployments where **2G dropouts and power cuts** are routine—not edge cases.
 
+**Module:** `github.com/sharanyashwant27-tech/vanisync-beckn`
+
 ---
 
 ## Why Dumka / offline-first?
@@ -34,9 +36,9 @@ flowchart TB
 |-------|----------------|
 | `pkg/vanisync` | Public API — confirm order, start sync |
 | `internal/outbox` | Atomic write: order + outbox |
-| `internal/sync` | FIFO relay, retry/backoff |
+| `internal/sync` | FIFO relay, IN_FLIGHT recovery, retry/backoff |
 | `internal/beckn` | Retail confirm JSON, signature headers |
-| `internal/crypto` | Ed25519 key management |
+| `internal/crypto` | Ed25519 key management (persistent key file) |
 | `internal/voice` | ASR interface (Bhashini stub in v1) |
 
 **Formal model:** [specs/VaniSyncOutbox.tla](specs/VaniSyncOutbox.tla) proves safety (`NoOrphans`) and liveness (`EventualConsistency`) for the outbox relay.
@@ -54,7 +56,8 @@ flowchart TB
 ├── pkg/vanisync/          Public SDK surface
 ├── cmd/migrate/           SQLite migration runner
 ├── migrations/            SQLite schema
-├── test/refinement/       TLA+ ↔ Go invariant tests
+├── test/refinement/       TLA+ ↔ Go invariant tests (abstract + real store/sync)
+├── test/integration/      beckn/starter-kit sandbox (Docker, opt-in)
 ├── docker/                beckn/starter-kit integration stub
 └── .cursor/               Agent rules + MCP (SQLite, filesystem)
 ```
@@ -73,7 +76,7 @@ flowchart TB
 ### 1. Clone and enter the repo
 
 ```bash
-git clone https://github.com/yashwant/VaniSync-Beckn-Gateway-Library.git
+git clone https://github.com/sharanyashwant27-tech/VaniSync-Beckn-Gateway-Library.git
 cd VaniSync-Beckn-Gateway-Library
 ```
 
@@ -84,14 +87,15 @@ make test
 # or: go test ./...
 ```
 
-All packages with tests pass (`internal/beckn`, `internal/crypto`, `internal/outbox`, `internal/sync`, `pkg/vanisync`, `test/refinement`).
+CI runs the same suite on every push to `main` via [`.github/workflows/go-test.yml`](.github/workflows/go-test.yml).
 
-### 3. Prepare local SQLite
+### 3. Prepare local SQLite and signing key
 
 ```bash
 mkdir -p data
 make migrate
-# Database file: ./data/vanisync.db (override with DB_PATH=...)
+# Database: ./data/vanisync.db (override with DB_PATH=...)
+# Ed25519 key: ./data/ed25519.key (auto-created on first Client.New)
 ```
 
 ### 4. Verify the TLA+ outbox model
@@ -121,7 +125,7 @@ Restart Cursor after editing MCP config. On Windows, if the SQLite server fails 
 
 ### 6. beckn/starter-kit sandbox (optional)
 
-See commented stub in [`docker/compose.starter-kit.yml`](docker/compose.starter-kit.yml). Clone [beckn/starter-kit](https://github.com/beckn/starter-kit) and uncomment services for end-to-end retail confirm tests.
+Integration tests live in [`test/integration/`](test/integration/) and skip unless Docker is available and `VANISYNC_INTEGRATION=1` is set. See commented stub in [`docker/compose.starter-kit.yml`](docker/compose.starter-kit.yml).
 
 ---
 
@@ -132,8 +136,25 @@ Enforced via [`.cursor/rules/vanisync-beckn.mdc`](.cursor/rules/vanisync-beckn.m
 - Atomic outbox — one transaction for domain + queue
 - **No network I/O** in business handlers
 - Sign payloads **before** outbox insert (Ed25519, base64 on wire)
-- FIFO sync queue
+- FIFO sync queue with single in-flight message and stale IN_FLIGHT recovery
 - `context.Context` first parameter; `log/slog` for logging
+
+---
+
+## MVP success criteria
+
+| Criterion | Status |
+|-----------|--------|
+| `ConfirmRetailOrder` writes order + outbox atomically in SQLite | Done |
+| Sync engine relays FIFO with signed idempotency key when network is up | Done |
+| Network drop does not lose or duplicate orders (refinement tests pass) | Done |
+| Go-level refinement tests exercise real store + sync sequences | Done |
+| IN_FLIGHT crash recovery and single in-flight enforcement | Done |
+| Persistent Ed25519 key file under `data/` (configurable) | Done |
+| TLC model runs without invariant violation (bounded state space) | Done (local `make tla-check`) |
+| `.cursor/rules` constraints documented; CI runs `go test ./...` | Done |
+| README documents Dumka rationale and local dev quickstart | Done |
+| beckn/starter-kit end-to-end integration | Scaffold only (Docker opt-in) |
 
 ---
 
@@ -143,8 +164,8 @@ Enforced via [`.cursor/rules/vanisync-beckn.mdc`](.cursor/rules/vanisync-beckn.m
 |-------|-------|--------|
 | 1 | Architecture docs, ADRs, Cursor workspace | Done |
 | 2 | TLA+ spec + `make tla-check` | Done |
-| 3 | Go core — store, outbox, sync, `pkg/vanisync` | **MVP complete** (`go test ./...` green) |
-| 4 | Refinement tests, starter-kit integration | Partial (refinement tests in repo; starter-kit stub) |
+| 3 | Go core — store, outbox, sync, `pkg/vanisync` | **MVP complete** |
+| 4 | Refinement tests, starter-kit integration | Refinement done; integration scaffold |
 
 ---
 
