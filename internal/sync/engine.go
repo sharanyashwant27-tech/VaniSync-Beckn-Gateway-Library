@@ -2,13 +2,17 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
 )
+
+const defaultInFlightTimeout = 5 * time.Minute
 
 // NetworkProbe reports whether outbound relay is allowed.
 type NetworkProbe interface {
@@ -27,24 +31,27 @@ func (p StaticProbe) IsActive(_ context.Context) bool {
 
 // Engine drains the outbox FIFO when the network is available.
 type Engine struct {
-	store       *store.Store
-	relay       beckn.RelayClient
-	probe       NetworkProbe
-	keys        *crypto.SimpleKeyManager
-	pollInterval time.Duration
-	baseBackoff  time.Duration
-	logger       *slog.Logger
+	store            *store.Store
+	relay            beckn.RelayClient
+	probe            NetworkProbe
+	keys             *crypto.SimpleKeyManager
+	pollInterval     time.Duration
+	baseBackoff      time.Duration
+	inFlightTimeout  time.Duration
+	logger           *slog.Logger
+	mu               sync.Mutex
 }
 
 // Config configures the sync engine.
 type Config struct {
-	Store        *store.Store
-	Relay        beckn.RelayClient
-	Probe        NetworkProbe
-	Keys         *crypto.SimpleKeyManager
-	PollInterval time.Duration
-	BaseBackoff  time.Duration
-	Logger       *slog.Logger
+	Store            *store.Store
+	Relay            beckn.RelayClient
+	Probe            NetworkProbe
+	Keys             *crypto.SimpleKeyManager
+	PollInterval     time.Duration
+	BaseBackoff      time.Duration
+	InFlightTimeout  time.Duration
+	Logger           *slog.Logger
 }
 
 // NewEngine creates a background sync engine.
@@ -55,6 +62,9 @@ func NewEngine(cfg Config) *Engine {
 	if cfg.BaseBackoff <= 0 {
 		cfg.BaseBackoff = time.Second
 	}
+	if cfg.InFlightTimeout <= 0 {
+		cfg.InFlightTimeout = defaultInFlightTimeout
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -62,18 +72,23 @@ func NewEngine(cfg Config) *Engine {
 		cfg.Probe = StaticProbe{Active: true}
 	}
 	return &Engine{
-		store:        cfg.Store,
-		relay:        cfg.Relay,
-		probe:        cfg.Probe,
-		keys:         cfg.Keys,
-		pollInterval: cfg.PollInterval,
-		baseBackoff:  cfg.BaseBackoff,
-		logger:       cfg.Logger,
+		store:           cfg.Store,
+		relay:           cfg.Relay,
+		probe:           cfg.Probe,
+		keys:            cfg.Keys,
+		pollInterval:    cfg.PollInterval,
+		baseBackoff:     cfg.BaseBackoff,
+		inFlightTimeout: cfg.InFlightTimeout,
+		logger:          cfg.Logger,
 	}
 }
 
 // Run processes the outbox until ctx is cancelled.
 func (e *Engine) Run(ctx context.Context) error {
+	if err := e.store.ReclaimInFlight(ctx); err != nil {
+		return fmt.Errorf("sync: reclaim in-flight on start: %w", err)
+	}
+
 	ticker := time.NewTicker(e.pollInterval)
 	defer ticker.Stop()
 
@@ -90,7 +105,23 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 func (e *Engine) tick(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	staleBefore := store.NowMillis() - e.inFlightTimeout.Milliseconds()
+	if _, err := e.store.ReclaimStaleInFlight(ctx, staleBefore); err != nil {
+		return err
+	}
+
 	if !e.probe.IsActive(ctx) {
+		return nil
+	}
+
+	n, err := e.store.CountInFlight(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
 		return nil
 	}
 
@@ -102,7 +133,7 @@ func (e *Engine) tick(ctx context.Context) error {
 		return nil
 	}
 
-	if err := e.store.MarkQueueStatus(ctx, item.ID, store.QueueStatusInFlight); err != nil {
+	if err := e.store.MarkQueueInFlight(ctx, item.ID); err != nil {
 		return err
 	}
 

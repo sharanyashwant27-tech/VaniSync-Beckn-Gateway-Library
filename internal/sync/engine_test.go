@@ -4,13 +4,60 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/yashwant/vanisync-beckn/internal/beckn"
-	"github.com/yashwant/vanisync-beckn/internal/crypto"
-	"github.com/yashwant/vanisync-beckn/internal/outbox"
-	"github.com/yashwant/vanisync-beckn/internal/store"
-	"github.com/yashwant/vanisync-beckn/internal/sync"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/beckn"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/outbox"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
+	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/sync"
 )
+
+func TestEngineEnforcesSingleInFlight(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "single.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	keys, _ := crypto.NewSimpleKeyManager()
+	writer := outbox.NewWriter(st, keys)
+	mock := &beckn.MockRelayClient{}
+
+	for _, id := range []string{"one", "two"} {
+		payload := []byte(`{"order":"` + id + `"}`)
+		_, err := writer.WriteOrderWithOutbox(ctx, store.LocalOrder{
+			ID: id, BecknAction: "confirm", PayloadJSON: string(payload),
+		}, payload)
+		if err != nil {
+			t.Fatalf("write %s: %v", id, err)
+		}
+	}
+
+	engine := sync.NewEngine(sync.Config{
+		Store: st,
+		Relay: mock,
+		Probe: sync.StaticProbe{Active: true},
+		Keys:  keys,
+	})
+
+	if err := engine.ProcessOnce(ctx); err != nil {
+		t.Fatalf("first process: %v", err)
+	}
+	n, err := st.CountInFlight(ctx)
+	if err != nil {
+		t.Fatalf("count in-flight: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected no in-flight after successful relay, got %d", n)
+	}
+	if len(mock.Calls) != 1 {
+		t.Fatalf("expected one relay per tick, got %d", len(mock.Calls))
+	}
+}
 
 func TestEngineRelaysFIFOWhenNetworkUp(t *testing.T) {
 	t.Parallel()
@@ -94,5 +141,59 @@ func TestEngineSkipsWhenNetworkDown(t *testing.T) {
 	}
 	if len(mock.Calls) != 0 {
 		t.Fatal("expected no relay when network down")
+	}
+}
+
+func TestEngineReclaimsInFlightOnStart(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "reclaim.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	keys, _ := crypto.NewSimpleKeyManager()
+	writer := outbox.NewWriter(st, keys)
+	payload := []byte(`{"order":"stale"}`)
+	outboxID, err := writer.WriteOrderWithOutbox(ctx, store.LocalOrder{
+		ID: "stale", BecknAction: "confirm", PayloadJSON: string(payload),
+	}, payload)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := st.MarkQueueInFlight(ctx, outboxID); err != nil {
+		t.Fatalf("mark in-flight: %v", err)
+	}
+
+	mock := &beckn.MockRelayClient{}
+	engine := sync.NewEngine(sync.Config{
+		Store: st,
+		Relay: mock,
+		Probe: sync.StaticProbe{Active: true},
+		Keys:  keys,
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.Run(runCtx)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(mock.Calls) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if len(mock.Calls) != 1 {
+		t.Fatalf("expected relay after reclaim, got %d calls", len(mock.Calls))
 	}
 }

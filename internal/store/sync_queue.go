@@ -49,11 +49,72 @@ func (s *Store) MarkQueueStatus(ctx context.Context, id, status string) error {
 	return nil
 }
 
+// CountInFlight returns the number of outbox rows currently marked IN_FLIGHT.
+func (s *Store) CountInFlight(ctx context.Context) (int, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_queue WHERE status = ?`, QueueStatusInFlight)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("count in-flight: %w", err)
+	}
+	return n, nil
+}
+
+// ReclaimInFlight resets all IN_FLIGHT rows to PENDING (crash recovery on engine start).
+func (s *Store) ReclaimInFlight(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sync_queue
+		SET status = ?, in_flight_at = NULL
+		WHERE status = ?`, QueueStatusPending, QueueStatusInFlight)
+	if err != nil {
+		return fmt.Errorf("reclaim in-flight: %w", err)
+	}
+	return nil
+}
+
+// ReclaimStaleInFlight resets IN_FLIGHT rows older than staleBeforeMs to PENDING.
+func (s *Store) ReclaimStaleInFlight(ctx context.Context, staleBeforeMs int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sync_queue
+		SET status = ?, in_flight_at = NULL
+		WHERE status = ? AND in_flight_at IS NOT NULL AND in_flight_at < ?`,
+		QueueStatusPending, QueueStatusInFlight, staleBeforeMs)
+	if err != nil {
+		return 0, fmt.Errorf("reclaim stale in-flight: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("reclaim stale in-flight rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// MarkQueueInFlight marks a pending row IN_FLIGHT when no other row is in flight.
+func (s *Store) MarkQueueInFlight(ctx context.Context, id string) error {
+	now := NowMillis()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sync_queue
+		SET status = ?, in_flight_at = ?
+		WHERE id = ? AND status = ?
+		AND NOT EXISTS (SELECT 1 FROM sync_queue WHERE status = ? AND id != ?)`,
+		QueueStatusInFlight, now, id, QueueStatusPending, QueueStatusInFlight, id)
+	if err != nil {
+		return fmt.Errorf("mark in-flight: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark in-flight rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("mark in-flight: row %q unavailable or another in-flight exists", id)
+	}
+	return nil
+}
+
 // IncrementAttempt bumps attempt_count and resets status to PENDING for retry.
 func (s *Store) IncrementAttempt(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE sync_queue
-		SET attempt_count = attempt_count + 1, status = ?
+		SET attempt_count = attempt_count + 1, status = ?, in_flight_at = NULL
 		WHERE id = ?`, QueueStatusPending, id)
 	if err != nil {
 		return fmt.Errorf("increment attempt: %w", err)
@@ -73,7 +134,8 @@ func (s *Store) MarkSent(ctx context.Context, queueID, orderID string) error {
 }
 
 func markQueueStatusTx(ctx context.Context, tx *sql.Tx, id, status string) error {
-	_, err := tx.ExecContext(ctx, `UPDATE sync_queue SET status = ? WHERE id = ?`, status, id)
+	_, err := tx.ExecContext(ctx, `
+		UPDATE sync_queue SET status = ?, in_flight_at = NULL WHERE id = ?`, status, id)
 	if err != nil {
 		return fmt.Errorf("mark queue status: %w", err)
 	}

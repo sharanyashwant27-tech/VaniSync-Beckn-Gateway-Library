@@ -46,6 +46,10 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.migrateOptionalColumns(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -53,6 +57,15 @@ func Open(ctx context.Context, dbPath string) (*Store, error) {
 func (s *Store) MigrateEmbedded(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, embeddedSchema); err != nil {
 		return fmt.Errorf("apply embedded schema: %w", err)
+	}
+	return nil
+}
+
+// migrateOptionalColumns applies idempotent schema upgrades for existing databases.
+func (s *Store) migrateOptionalColumns(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `ALTER TABLE sync_queue ADD COLUMN in_flight_at INTEGER`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return fmt.Errorf("add in_flight_at column: %w", err)
 	}
 	return nil
 }

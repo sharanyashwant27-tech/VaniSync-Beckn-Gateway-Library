@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS sync_queue (
     signature       TEXT NOT NULL,
     status          TEXT NOT NULL,
     attempt_count   INTEGER NOT NULL DEFAULT 0,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    in_flight_at    INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON sync_queue(status, created_at);
