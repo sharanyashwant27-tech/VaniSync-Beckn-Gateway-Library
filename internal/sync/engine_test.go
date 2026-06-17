@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -195,5 +196,89 @@ func TestEngineReclaimsInFlightOnStart(t *testing.T) {
 
 	if len(mock.Calls) != 1 {
 		t.Fatalf("expected relay after reclaim, got %d calls", len(mock.Calls))
+	}
+}
+
+func TestEngineMarksFailedOnGateway4xx(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "4xx.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	keys, _ := crypto.NewSimpleKeyManager()
+	writer := outbox.NewWriter(st, keys)
+	payload := []byte(`{"order":"bad"}`)
+	_, err = writer.WriteOrderWithOutbox(ctx, store.LocalOrder{
+		ID: "bad", BecknAction: "confirm", PayloadJSON: string(payload),
+	}, payload)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	relay := &beckn.MockRelayClient{Err: &beckn.RelayHTTPError{StatusCode: 400}}
+	engine := sync.NewEngine(sync.Config{
+		Store: st,
+		Relay: relay,
+		Probe: sync.StaticProbe{Active: true},
+		Keys:  keys,
+	})
+
+	if err := engine.ProcessOnce(ctx); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	order, err := st.GetOrder(ctx, "bad")
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.Status != store.OrderStatusFailed {
+		t.Fatalf("order status = %q, want FAILED", order.Status)
+	}
+}
+
+func TestEngineMarksFailedAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "max.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	keys, _ := crypto.NewSimpleKeyManager()
+	writer := outbox.NewWriter(st, keys)
+	payload := []byte(`{"order":"retry"}`)
+	_, err = writer.WriteOrderWithOutbox(ctx, store.LocalOrder{
+		ID: "retry", BecknAction: "confirm", PayloadJSON: string(payload),
+	}, payload)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	relay := &beckn.MockRelayClient{Err: errors.New("network down")}
+	engine := sync.NewEngine(sync.Config{
+		Store:       st,
+		Relay:       relay,
+		Probe:       sync.StaticProbe{Active: true},
+		Keys:        keys,
+		MaxAttempts: 1,
+		BaseBackoff: time.Millisecond,
+	})
+
+	if err := engine.ProcessOnce(ctx); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	order, err := st.GetOrder(ctx, "retry")
+	if err != nil {
+		t.Fatalf("get order: %v", err)
+	}
+	if order.Status != store.OrderStatusFailed {
+		t.Fatalf("order status = %q, want FAILED", order.Status)
 	}
 }

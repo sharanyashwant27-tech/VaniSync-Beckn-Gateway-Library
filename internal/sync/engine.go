@@ -12,7 +12,10 @@ import (
 	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/store"
 )
 
-const defaultInFlightTimeout = 5 * time.Minute
+const (
+	defaultInFlightTimeout = 5 * time.Minute
+	defaultMaxAttempts     = 10
+)
 
 // NetworkProbe reports whether outbound relay is allowed.
 type NetworkProbe interface {
@@ -38,6 +41,7 @@ type Engine struct {
 	pollInterval     time.Duration
 	baseBackoff      time.Duration
 	inFlightTimeout  time.Duration
+	maxAttempts      int
 	logger           *slog.Logger
 	mu               sync.Mutex
 }
@@ -51,6 +55,7 @@ type Config struct {
 	PollInterval     time.Duration
 	BaseBackoff      time.Duration
 	InFlightTimeout  time.Duration
+	MaxAttempts      int
 	Logger           *slog.Logger
 }
 
@@ -64,6 +69,9 @@ func NewEngine(cfg Config) *Engine {
 	}
 	if cfg.InFlightTimeout <= 0 {
 		cfg.InFlightTimeout = defaultInFlightTimeout
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = defaultMaxAttempts
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -79,6 +87,7 @@ func NewEngine(cfg Config) *Engine {
 		pollInterval:    cfg.PollInterval,
 		baseBackoff:     cfg.BaseBackoff,
 		inFlightTimeout: cfg.InFlightTimeout,
+		maxAttempts:     cfg.MaxAttempts,
 		logger:          cfg.Logger,
 	}
 }
@@ -105,35 +114,8 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 func (e *Engine) tick(ctx context.Context) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	staleBefore := store.NowMillis() - e.inFlightTimeout.Milliseconds()
-	if _, err := e.store.ReclaimStaleInFlight(ctx, staleBefore); err != nil {
-		return err
-	}
-
-	if !e.probe.IsActive(ctx) {
-		return nil
-	}
-
-	n, err := e.store.CountInFlight(ctx)
-	if err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-
-	item, err := e.store.DequeuePending(ctx)
-	if err != nil {
-		return err
-	}
-	if item == nil {
-		return nil
-	}
-
-	if err := e.store.MarkQueueInFlight(ctx, item.ID); err != nil {
+	item, err := e.claimNext(ctx)
+	if err != nil || item == nil {
 		return err
 	}
 
@@ -149,20 +131,77 @@ func (e *Engine) tick(ctx context.Context) error {
 		PublicKeyB64:   pubKey,
 	})
 	if relayErr != nil {
-		e.logger.Warn("relay failed", "queue_id", item.ID, "attempt", item.AttemptCount+1, "err", relayErr)
-		if err := e.store.IncrementAttempt(ctx, item.ID); err != nil {
-			return err
-		}
-		backoff := e.backoffDuration(item.AttemptCount + 1)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		return nil
+		return e.handleRelayFailure(ctx, item, relayErr)
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.store.MarkSent(ctx, item.ID, item.AggregateID)
+}
+
+func (e *Engine) claimNext(ctx context.Context) (*store.SyncQueueItem, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	staleBefore := store.NowMillis() - e.inFlightTimeout.Milliseconds()
+	if _, err := e.store.ReclaimStaleInFlight(ctx, staleBefore); err != nil {
+		return nil, err
+	}
+	if _, err := e.store.ReclaimNullInFlightAt(ctx); err != nil {
+		return nil, err
+	}
+
+	if !e.probe.IsActive(ctx) {
+		return nil, nil
+	}
+
+	n, err := e.store.CountInFlight(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, nil
+	}
+
+	item, err := e.store.DequeuePending(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if item == nil {
+		return nil, nil
+	}
+
+	if err := e.store.MarkQueueInFlight(ctx, item.ID); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (e *Engine) handleRelayFailure(ctx context.Context, item *store.SyncQueueItem, relayErr error) error {
+	newAttempt := item.AttemptCount + 1
+	e.logger.Warn("relay failed", "queue_id", item.ID, "attempt", newAttempt, "err", relayErr)
+
+	if beckn.IsRelayClientError(relayErr) || newAttempt >= e.maxAttempts {
+		e.mu.Lock()
+		err := e.store.MarkFailed(ctx, item.ID, item.AggregateID)
+		e.mu.Unlock()
+		return err
+	}
+
+	e.mu.Lock()
+	err := e.store.IncrementAttempt(ctx, item.ID)
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	backoff := e.backoffDuration(newAttempt)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(backoff):
+	}
+	return nil
 }
 
 func (e *Engine) backoffDuration(attempt int) time.Duration {
