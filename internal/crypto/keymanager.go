@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,21 +51,23 @@ func LoadSimpleKeyManager(path string) (*SimpleKeyManager, error) {
 
 // LoadOrCreateSimpleKeyManager loads a key from path or generates and persists a new one.
 func LoadOrCreateSimpleKeyManager(path string) (*SimpleKeyManager, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			km, err := NewSimpleKeyManager()
-			if err != nil {
-				return nil, err
-			}
-			if err := km.Save(path); err != nil {
-				return nil, err
-			}
-			return km, nil
-		}
-		return nil, fmt.Errorf("read key file: %w", err)
+	if _, err := os.Stat(path); err == nil {
+		return LoadSimpleKeyManager(path)
+	} else if !errors.Is(err, os.ErrNotExist) && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat key file: %w", err)
 	}
-	return loadSimpleKeyManagerFromBytes(data)
+
+	km, err := NewSimpleKeyManager()
+	if err != nil {
+		return nil, err
+	}
+	if err := km.saveExclusive(path); err != nil {
+		if errors.Is(err, os.ErrExist) || os.IsExist(err) {
+			return LoadSimpleKeyManager(path)
+		}
+		return nil, err
+	}
+	return km, nil
 }
 
 func loadSimpleKeyManagerFromBytes(data []byte) (*SimpleKeyManager, error) {
@@ -79,18 +82,51 @@ func loadSimpleKeyManagerFromBytes(data []byte) (*SimpleKeyManager, error) {
 	return NewSimpleKeyManagerFromSeed(seed)
 }
 
-// Save persists the private key seed to path with restrictive permissions.
-func (km *SimpleKeyManager) Save(path string) error {
+func marshalKeyFile(km *SimpleKeyManager) ([]byte, error) {
+	seed := km.privateKey.Seed()
+	return json.Marshal(keyFile{Seed: base64.StdEncoding.EncodeToString(seed)})
+}
+
+func writeKeyFileExclusive(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create key directory: %w", err)
 	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return fmt.Errorf("write key file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("close key file: %w", err)
+	}
+	return nil
+}
 
-	seed := km.privateKey.Seed()
-	data, err := json.Marshal(keyFile{Seed: base64.StdEncoding.EncodeToString(seed)})
+func (km *SimpleKeyManager) saveExclusive(path string) error {
+	data, err := marshalKeyFile(km)
 	if err != nil {
 		return fmt.Errorf("marshal key file: %w", err)
 	}
+	if err := writeKeyFileExclusive(path, data); err != nil {
+		return err
+	}
+	return nil
+}
 
+// Save persists the private key seed to path with restrictive permissions.
+func (km *SimpleKeyManager) Save(path string) error {
+	data, err := marshalKeyFile(km)
+	if err != nil {
+		return fmt.Errorf("marshal key file: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create key directory: %w", err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write key file: %w", err)
 	}

@@ -2,6 +2,7 @@ package crypto_test
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/sharanyashwant27-tech/vanisync-beckn/internal/crypto"
@@ -48,5 +49,44 @@ func TestLoadOrCreatePersistsKey(t *testing.T) {
 	}
 	if km2.PublicKeyBase64() != pub1 {
 		t.Fatal("loaded key should match persisted key")
+	}
+}
+
+func TestLoadOrCreateConcurrentUsesSameKey(t *testing.T) {
+	t.Parallel()
+
+	keyPath := filepath.Join(t.TempDir(), "ed25519.key")
+	const workers = 16
+
+	var wg sync.WaitGroup
+	pubs := make([]string, workers)
+	errs := make([]error, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			km, err := crypto.LoadOrCreateSimpleKeyManager(keyPath)
+			errs[i] = err
+			if km != nil {
+				pubs[i] = km.PublicKeyBase64()
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	var ref string
+	for i := 0; i < workers; i++ {
+		if errs[i] != nil {
+			t.Fatalf("worker %d: %v", i, errs[i])
+		}
+		if pubs[i] == "" {
+			t.Fatalf("worker %d: empty public key", i)
+		}
+		if ref == "" {
+			ref = pubs[i]
+		} else if pubs[i] != ref {
+			t.Fatalf("worker %d public key mismatch", i)
+		}
 	}
 }
