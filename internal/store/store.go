@@ -93,8 +93,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Migrate applies SQL files from dir in lexical order.
+// Migrate applies SQL files from dir in lexical order, skipping already-recorded migrations.
 func (s *Store) Migrate(ctx context.Context, dir string) error {
+	if err := s.ensureSchemaMigrations(ctx); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
@@ -104,16 +108,57 @@ func (s *Store) Migrate(ctx context.Context, dir string) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
+		name := entry.Name()
+		applied, err := s.isMigrationApplied(ctx, name)
+		if err != nil {
+			return fmt.Errorf("check migration %s: %w", name, err)
+		}
+		if applied {
+			continue
+		}
+
+		path := filepath.Join(dir, name)
 		sqlBytes, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", path, err)
 		}
-		if _, err := s.db.ExecContext(ctx, string(sqlBytes)); err != nil {
+		if _, err := s.db.ExecContext(ctx, string(sqlBytes)); err != nil && !isIgnorableMigrationError(err) {
 			return fmt.Errorf("apply migration %s: %w", path, err)
+		}
+		if err := s.recordMigration(ctx, name); err != nil {
+			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+func (s *Store) ensureSchemaMigrations(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		name       TEXT PRIMARY KEY,
+		applied_at INTEGER NOT NULL
+	)`)
+	return err
+}
+
+func (s *Store) isMigrationApplied(ctx context.Context, name string) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, name).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) recordMigration(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`,
+		name, NowMillis(),
+	)
+	return err
+}
+
+func isIgnorableMigrationError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column")
 }
 
 // WithTx runs fn inside a SQL transaction.
