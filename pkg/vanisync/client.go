@@ -37,6 +37,9 @@ func New(opts Options) (*Client, error) {
 	if opts.ASR == nil {
 		opts.ASR = voice.StubASRProvider{}
 	}
+	if opts.RelayEndpoint == "" && opts.Relay == nil {
+		return nil, fmt.Errorf("vanisync: relay configuration required: set Options.RelayEndpoint or Options.Relay")
+	}
 
 	ctx := context.Background()
 	st, err := store.Open(ctx, opts.DBPath)
@@ -56,10 +59,8 @@ func New(opts Options) (*Client, error) {
 	var relay beckn.RelayClient
 	if opts.RelayEndpoint != "" {
 		relay = beckn.NewHTTPRelayClient(opts.RelayEndpoint, opts.HTTPClient)
-	} else if opts.Relay != nil {
-		relay = opts.Relay
 	} else {
-		relay = &beckn.MockRelayClient{}
+		relay = opts.Relay
 	}
 
 	probe := opts.Probe

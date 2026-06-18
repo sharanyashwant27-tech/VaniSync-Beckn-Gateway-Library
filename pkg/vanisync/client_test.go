@@ -12,6 +12,18 @@ import (
 	"github.com/sharanyashwant27-tech/vanisync-beckn/pkg/vanisync"
 )
 
+func TestNewRequiresRelay(t *testing.T) {
+	t.Parallel()
+
+	_, err := vanisync.New(vanisync.Options{
+		DBPath: filepath.Join(t.TempDir(), "no-relay.db"),
+		Probe:  sync.StaticProbe{Active: false},
+	})
+	if err == nil {
+		t.Fatal("expected error when relay is not configured")
+	}
+}
+
 func TestConfirmRetailOrderWritesPendingOrder(t *testing.T) {
 	t.Parallel()
 
@@ -49,6 +61,7 @@ func TestConfirmOrderFromVoiceUsesStubASR(t *testing.T) {
 	ctx := context.Background()
 	client, err := vanisync.New(vanisync.Options{
 		DBPath: filepath.Join(t.TempDir(), "voice.db"),
+		Relay:  &beckn.MockRelayClient{},
 		Probe:  sync.StaticProbe{Active: false},
 	})
 	if err != nil {
@@ -79,6 +92,7 @@ func TestConfirmOrderFromVoiceFallsBackOnASRError(t *testing.T) {
 	ctx := context.Background()
 	client, err := vanisync.New(vanisync.Options{
 		DBPath: filepath.Join(t.TempDir(), "asr-fallback.db"),
+		Relay:  &beckn.MockRelayClient{},
 		Probe:  sync.StaticProbe{Active: false},
 		ASR:    failingASR{},
 	})
